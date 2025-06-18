@@ -1,8 +1,9 @@
 from functools import lru_cache
+import os
 import traceback
-from typing import Annotated
+from typing import Annotated, List
 from fastapi import FastAPI, Query
-import urllib.parse
+
 from fastapi.middleware.cors import CORSMiddleware
 from exllamav2 import (
     ExLlamaV2,
@@ -12,13 +13,20 @@ from exllamav2 import (
     ExLlamaV2Lora,
 )
 
-from exllamav2.generator import (
+ import (
     ExLlamaV2BaseGenerator,
     ExLlamaV2StreamingGenerator,
     ExLlamaV2Sampler
 )
-from transformers import AutoTokenizer
 
+
+
+# Groq client setup
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY", "")
+)
+MODEL_NAME = "qwen3-32B"
 
 app = FastAPI()
 
@@ -33,21 +41,18 @@ app.add_middleware(
 )
 
 
-model_path = "../models/Llama-2-7B-Chat-GPTQ"
-config = ExLlamaV2Config(model_path)
-model = ExLlamaV2(config)
-model.load()
-tokenizer = ExLlamaV2Tokenizer(config)
-cache = ExLlamaV2Cache(model)
 
-streaming_generator = ExLlamaV2StreamingGenerator(model, cache, tokenizer)
-streaming_generator.warmup()
-streaming_generator.set_stop_conditions([tokenizer.eos_token_id])
 
-simple_generator = ExLlamaV2BaseGenerator(model, cache, tokenizer)
 
-tokenizer_for_template = AutoTokenizer.from_pretrained(model_path)
-def create_prompt(symbol):    
+
+
+
+
+
+
+def create_prompt(text: str):
+    """Return a chat messages list suitable for OpenAI/Groq completion call."""
+    return [{"role": "user", "content": text}]    
     return [
         {
             "role": "user",

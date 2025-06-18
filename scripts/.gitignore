@@ -114,6 +114,8 @@ ipython_config.py
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
+# Groq API key file
+infini_craft/groq_api_key.txt
 
 # Celery stuff
 celerybeat-schedule
