@@ -10,10 +10,11 @@ import traceback
 import json
 from functools import lru_cache
 from typing import List, Annotated
+from pydantic import BaseModel
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
+from openai import OpenAI, BadRequestError
 
 # -----------------------------------------------------------------------------
 # Groq client configuration
@@ -74,13 +75,30 @@ def chat(
         # `response_format` parameter semantics as the OpenAI API.
         kwargs["response_format"] = {"type": "json_object"}
 
-    completion = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        **kwargs,
-    )
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+    except BadRequestError as e:
+        # Groq returns a 400 with code 'json_validate_failed' when the model
+        # fails to satisfy the strict JSON requirement. Fallback by retrying
+        # without the response_format constraint so that we still get a reply
+        # that we can attempt to parse heuristically.
+        if json_mode:
+            print(f"[chat] JSON mode failed, retrying in text mode: {e}")
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        else:
+            raise
+
     return completion.choices[0].message.content.strip()
 
 
@@ -198,6 +216,24 @@ def _split(symbol: str):
 
 # -----------------------------------------------------------------------------
 # API endpoints
+
+# -----------------------------------------------------------------------------
+# Payload models for custom prompt endpoints
+# -----------------------------------------------------------------------------
+
+class AddCustomRequest(BaseModel):
+    messages: List[dict]
+    symbols: List[str]
+
+
+class SplitCustomRequest(BaseModel):
+    messages: List[dict]
+    symbol: str
+
+
+# -----------------------------------------------------------------------------
+# API endpoints
+# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
 @app.get("/add")
@@ -213,6 +249,32 @@ async def add(symbols: Annotated[List[str], Query()]):
 async def split(symbol: str):
     try:
         return _split(symbol)
+    except Exception:
+        print(traceback.format_exc())
+        return [{"symbol": "", "emoji": ""}, {"symbol": "", "emoji": ""}]
+
+
+@app.post("/add_custom")
+async def add_custom(req: AddCustomRequest):
+    """Combine symbols with a fully custom prompt supplied by the client."""
+    try:
+        response_text = chat(req.messages, json_mode=True)
+        parsed = parse_add_response(response_text)
+        print(f"add_custom symbols={req.symbols} response='{response_text}' parsed={parsed}")
+        return parsed
+    except Exception:
+        print(traceback.format_exc())
+        return {"symbol": "", "emoji": ""}
+
+
+@app.post("/split_custom")
+async def split_custom(req: SplitCustomRequest):
+    """Split a symbol with a fully custom prompt supplied by the client."""
+    try:
+        response_text = chat(req.messages, json_mode=True)
+        parsed = parse_split_response(response_text)
+        print(f"split_custom symbol={req.symbol} response='{response_text}' parsed={parsed}")
+        return parsed
     except Exception:
         print(traceback.format_exc())
         return [{"symbol": "", "emoji": ""}, {"symbol": "", "emoji": ""}]

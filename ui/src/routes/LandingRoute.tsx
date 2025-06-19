@@ -8,6 +8,7 @@ import fourth_plop from "assets/fourth_plop.flac"
 import discovery_sound from "assets/discovery.flac"
 import error_sound from "assets/error.flac"
 import new_sound from "assets/new.flac"
+import PromptEditor from "../components/PromptEditor"
 
 interface Element {
   symbol: string;
@@ -15,7 +16,6 @@ interface Element {
   discovery?: boolean;
   timestamp?: number;
 }
-
 
 type MySketchProps = SketchProps & {
   selectedElement: Element | null;
@@ -316,6 +316,8 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
   const [sortCriterion, setSortCriterion] = React.useState<string>('time');
   const [isAscending, setIsAscending] = React.useState<boolean>(true);
   const [pinnedElements, setPinnedElements] = React.useState(new Set());
+  // helper to safely access emoji string within Sidebar
+  const getEmoji = (el: Element) => el.emoji ?? "";
 
   const handleElementPointerDown = (event: React.PointerEvent<HTMLDivElement>, element: Element) => {
     if (event.altKey) {
@@ -486,7 +488,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
     // Filter elements based on search query
     const filteredElements = elements.filter((element) =>
       element.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      element.emoji.includes(searchQuery)
+      getEmoji(element)?.includes(searchQuery)
     );
 
     const pinnedElementsArray = filteredElements.filter(element => pinnedElements.has(element.symbol));
@@ -500,8 +502,8 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
       // Prioritize pinned elements
 
       // If both are pinned or not, sort based on search query and other criteria
-      const queryMatchA = a.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || a.emoji.startsWith(searchQuery);
-      const queryMatchB = b.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || b.emoji.startsWith(searchQuery);
+      const queryMatchA = a.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || getEmoji(a).startsWith(searchQuery);
+      const queryMatchB = b.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || getEmoji(b).startsWith(searchQuery);
 
       if (queryMatchA && !queryMatchB) return 1;
       if (!queryMatchA && queryMatchB) return -1;
@@ -513,7 +515,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
         case 'discovery':
           return (a.discovery === b.discovery) ? 0 : a.discovery ? -1 : 1;
         case 'emoji':
-          return a.emoji.localeCompare(b.emoji);
+          return getEmoji(a).localeCompare(getEmoji(b));
         case 'symbol':
           return a.symbol.localeCompare(b.symbol);
         default:
@@ -634,10 +636,10 @@ const HelpOverlay = () => {
 
 var baseUrl = `http://localhost:8000/`;
 
-async function fetchCombinedSymbol(symbols: string[]) {
-  const encodedSymbols = symbols.map(symbol => encodeURIComponent(symbol)).join("&symbols=");
+async function fetchCombinedSymbol(symbol1: string, symbol2: string) {
+  const encodedSymbols = [symbol1, symbol2].map(symbol => encodeURIComponent(symbol));
 
-  const url = baseUrl + `add?symbols=${encodedSymbols}`;
+  const url = baseUrl + `add?symbols=${encodedSymbols.join("&symbols=")}`;
 
   const response = await fetch(url, {credentials: 'omit'});
 
@@ -683,6 +685,20 @@ const LandingRoute: React.FC = () => {
   });
   const [plopIdx, setPlopIdx] = React.useState<number>(0);
 
+  const [addUserPrompt, setAddUserPrompt] = React.useState<string>(
+    () => localStorage.getItem('addUserPrompt') ?? 'Combine {{symbol1}} and {{symbol2}}.'
+  );
+  
+  const [splitUserPrompt, setSplitUserPrompt] = React.useState<string>(
+    () => localStorage.getItem('splitUserPrompt') ?? 'Split {{symbol}} into two parts.'
+  );
+  
+  const [useCustomPrompt, setUseCustomPrompt] = React.useState<boolean>(
+    () => localStorage.getItem('useCustomPrompt') === 'true'
+  );
+  
+  const [isPromptEditorOpen, setIsPromptEditorOpen] = React.useState<boolean>(false);
+
   let plops = [first_plop, second_plop, third_plop, fourth_plop].map((plop: string) => new Audio(plop))
   let discovery = new Audio(discovery_sound)
   let error_element = new Audio(error_sound)
@@ -726,7 +742,11 @@ const LandingRoute: React.FC = () => {
     localStorage.setItem('inverseSymbolCombos', JSON.stringify(inverseSymbolCombos));
   }, [symbolCombos]);
 
-
+  React.useEffect(() => {
+    localStorage.setItem('addUserPrompt', addUserPrompt);
+    localStorage.setItem('splitUserPrompt', splitUserPrompt);
+    localStorage.setItem('useCustomPrompt', useCustomPrompt.toString());
+  }, [addUserPrompt, splitUserPrompt, useCustomPrompt]);
 
   const combineElement = async (symbol1: string, symbol2: string, callback: (element: Element) => void) => {
     const symbols = [symbol1, symbol2]
@@ -747,8 +767,33 @@ const LandingRoute: React.FC = () => {
     }
 
     try {
-      const newElement = await fetchCombinedSymbol(symbols) as Element;
-
+      let newElement: Element;
+      
+      if (useCustomPrompt) {
+        // カスタムプロンプトを組み立て
+        const userContent = addUserPrompt
+          .replace('{{symbol1}}', symbol1)
+          .replace('{{symbol2}}', symbol2);
+          
+        const messages = [
+          { role: "system", content: "You are an API that returns JSON." },
+          { role: "user", content: userContent }
+        ];
+        
+        const response = await fetch(baseUrl + `add_custom`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, symbols: [symbol1, symbol2] }),
+          credentials: 'omit',
+        });
+        
+        if (!response.ok) throw new Error('Network response was not ok');
+        newElement = await response.json();
+      } else {
+        // デフォルトのエンドポイント
+        newElement = await fetchCombinedSymbol(symbol1, symbol2);
+      }
+      
       setElements(currentElements => {
         const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
 
@@ -791,29 +836,45 @@ const LandingRoute: React.FC = () => {
   };
 
   const splitElement = async (symbol: string, callback: (elements: Element[]) => void) => {
-    // Use the symbol directly as a key since we are splitting a single symbol
     const existingElements = inverseSymbolCombos[symbol];
-  
+    
     if (existingElements) {
-      if (existingElements.some(element => element.symbol === "")) {
-        error_element.play();
-      } else {
-        playPlop();
-      }
-  
       callback(existingElements);
       return;
     }
-  
-    try {
-      const newElements = await fetchSplitSymbol(symbol) as Element[];
 
+    try {
+      let newElements: Element[];
+      
+      if (useCustomPrompt) {
+        // カスタムプロンプトを組み立て
+        const userContent = splitUserPrompt.replace('{{symbol}}', symbol);
+        
+        const messages = [
+          { role: "system", content: "You are an API that returns JSON." },
+          { role: "user", content: userContent }
+        ];
+        
+        const response = await fetch(baseUrl + `split_custom`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, symbol }),
+          credentials: 'omit',
+        });
+        
+        if (!response.ok) throw new Error('Network response was not ok');
+        newElements = await response.json();
+      } else {
+        // デフォルトのエンドポイント
+        newElements = await fetchSplitSymbol(symbol) as Element[];
+      }
+      
       setElements(currentElements => {
         const updatedElements = [...currentElements];
-  
+        
         newElements.forEach(newElement => {
           const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
-  
+          
           if (newElement.discovery && isElementUnique) {
             discovery.play();
           } else {
@@ -823,33 +884,28 @@ const LandingRoute: React.FC = () => {
               playPlop();
             }
           }
-  
+          
           if (isElementUnique) {
             updatedElements.push(newElement);
           }
         });
-  
+        
         return updatedElements;
       });
-  
+      
       setInverseSymbolCombos(currentCombos => ({
         ...currentCombos,
         [symbol]: newElements,
       }));
-  
+      
       callback(newElements);
     } catch (error) {
       console.error("Error calling on_split_request:", error);
       error_element.play();
-  
-      const badElements = [{ symbol: "", emoji: "", discovery: false }, { symbol: "", emoji: "", discovery: false }];
-  
-      setInverseSymbolCombos(currentCombos => ({
-        ...currentCombos,
-        [symbol]: badElements,
-      }));
-  
-      callback(badElements);
+      callback([
+        { symbol: "", emoji: "", discovery: false },
+        { symbol: "", emoji: "", discovery: false }
+      ]);
     }
   };
 
@@ -870,6 +926,16 @@ const LandingRoute: React.FC = () => {
 
   return (
     <div className="app-container">
+      <PromptEditor
+        isOpen={isPromptEditorOpen}
+        onClose={() => setIsPromptEditorOpen(false)}
+        addUserPrompt={addUserPrompt}
+        setAddUserPrompt={setAddUserPrompt}
+        splitUserPrompt={splitUserPrompt}
+        setSplitUserPrompt={setSplitUserPrompt}
+        useCustomPrompt={useCustomPrompt}
+        setUseCustomPrompt={setUseCustomPrompt}
+      />
       <HelpOverlay/>
       <div className={styles.canvasContainer}>
         <ReactP5Wrapper sketch={sketch} selectedElement={selectedElement} onElementClick={setSelectedElement} combineElement={combineElement} splitElement={splitElement} symbolCombos={symbolCombos} playPlop={playPlop}/>
@@ -877,6 +943,9 @@ const LandingRoute: React.FC = () => {
       <div className={styles.sidebarLinks}>
         <a href="https://neal.fun/infinite-craft/" className={styles.linkButton} target="_blank" rel="noopener noreferrer">
           📜 Neal.Fun
+        </a>
+        <a onClick={() => setIsPromptEditorOpen(true)} className={styles.linkButton} style={{ cursor: 'pointer' }}>
+          📝 Prompt
         </a>
         <a href="https://ko-fi.com/robchad" className={styles.linkButton} target="_blank" rel="noopener noreferrer">
           ☕ Donate
