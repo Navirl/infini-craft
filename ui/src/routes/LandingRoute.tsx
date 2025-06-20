@@ -9,10 +9,42 @@ import discovery_sound from "assets/discovery.flac"
 import error_sound from "assets/error.flac"
 import new_sound from "assets/new.flac"
 import PromptEditor from "../components/PromptEditor"
+import HelpOverlay from './HelpOverlay';
+
+var baseUrl = `http://localhost:8000/`;
+
+async function fetchCombinedSymbol(symbol1: string, symbol2: string) {
+  const encodedSymbols = [symbol1, symbol2].map(symbol => encodeURIComponent(symbol));
+
+  const url = baseUrl + `add?symbols=${encodedSymbols.join("&symbols=")}`;
+
+  const response = await fetch(url, {credentials: 'omit'});
+
+  if (!response.ok) {
+    throw new Error('Network response was not ok');
+  }
+
+  const json = await response.json();
+  return json.result;
+}
+
+async function fetchSplitSymbol(symbol: string) {
+  const encoded = encodeURIComponent(symbol)
+
+  const url = baseUrl + `split?symbol=${encoded}`;
+
+  const response = await fetch(url, {credentials: 'omit'});
+
+  if (!response.ok) {
+    throw new Error('Network response was not ok');
+  }
+
+  const json = await response.json();
+  return json.result;
+}
 
 interface Element {
   symbol: string;
-  emoji: string;
   discovery?: boolean;
   timestamp?: number;
 }
@@ -20,8 +52,8 @@ interface Element {
 type MySketchProps = SketchProps & {
   selectedElement: Element | null;
   onElementClick: (element: Element) => void;
-  combineElement: (symbol1: string, symbol2: string, callback: (element: Element) => void) => void;
-  splitElement: (symbol: string, callback: (element: Element[]) => void) => void;
+  combineElement: (symbol1: string, symbol2: string, callback: (elements: Element[]) => void) => void;
+  splitElement: (symbol: string, callback: (elements: Element[]) => void) => void;
   symbolCombos: { [key: string]: Element };
   playPlop: () => void
 };
@@ -43,8 +75,8 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
   let placedElements: PlacedElement[] = []
   let selectedElement: Element | null = null;
   let onElementClick: (element: Element) => void = () => {};
-  let combineElement: (symbol1: string, symbol2: string, callback: (element: Element) => void) => void = () => {}
-  let splitElement: (symbol: string, callback: (element: Element[]) => void) => void = () => {}
+  let combineElement: (symbol1: string, symbol2: string, callback: (elements: Element[]) => void) => void = () => {}
+  let splitElement: (symbol: string, callback: (elements: Element[]) => void) => void = () => {}
   let symbolCombos: { [key: string]: Element } = {}
   let playPlop: () => void
   let selectedForDragging: PlacedElement | null = null; 
@@ -67,8 +99,8 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
 
   function checkOverlap(newElement: PlacedElement, existingElement: PlacedElement): boolean {
     // Get the bounding boxes for each element
-    const newElementBounds = calculateTextBounds(`${newElement.element.emoji} ${newElement.element.symbol}`, newElement.x, newElement.y);
-    const existingElementBounds = calculateTextBounds(`${existingElement.element.emoji} ${existingElement.element.symbol}`, existingElement.x, existingElement.y);
+    const newElementBounds = calculateTextBounds(`${newElement.element.symbol}`, newElement.x, newElement.y);
+    const existingElementBounds = calculateTextBounds(`${existingElement.element.symbol}`, existingElement.x, existingElement.y);
     
     // Check if the bounding boxes overlap
     // Two rectangles overlap if the area of their intersection is positive
@@ -88,7 +120,7 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
     if (p5.mouseButton === p5.RIGHT) {
       for (let i = 0; i < placedElements.length; i++) {
         const placed = placedElements[i];
-        const bounds = calculateTextBounds(`${placed.element.emoji} ${placed.element.symbol}`, placed.x, placed.y);
+        const bounds = calculateTextBounds(`${placed.element.symbol}`, placed.x, placed.y);
         if (isInside(p5.mouseX, p5.mouseY, bounds)) {
           playPlop();
           
@@ -112,21 +144,15 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
               placeholders.splice(placeholderIndex, 1);
             }
   
-            if (response && response.length === 2 && response.every(el => el.symbol !== "" && el.emoji !== "")) {
+            if (response && response.length === 2 && response.every(el => el.symbol !== "")) {
               // Calculate new positions for the split elements
               const leftPosition = { x: placeholder.x - 50, y: placeholder.y }; // Adjust 50 to your needs
               const rightPosition = { x: placeholder.x + 50, y: placeholder.y }; // Adjust 50 to your needs
   
               // Add the new elements to placedElements
-              placedElements.push({
-                element: response[0],
-                x: leftPosition.x,
-                y: leftPosition.y
-              });
-              placedElements.push({
-                element: response[1],
-                x: rightPosition.x,
-                y: rightPosition.y
+              response.forEach(el => {
+                placedElements.push({ element: el, x: leftPosition.x, y: leftPosition.y });
+                placedElements.push({ element: el, x: rightPosition.x, y: rightPosition.y });
               });
             } else {
               // Handle the case where the split is not successful or doesn't return two elements
@@ -143,7 +169,7 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
       // Handle left-click for dragging
       selectedForDragging = null;
       for (let placed of placedElements) {
-        const bounds = calculateTextBounds(`${placed.element.emoji} ${placed.element.symbol}`, placed.x, placed.y);
+        const bounds = calculateTextBounds(`${placed.element.symbol}`, placed.x, placed.y);
         if (isInside(p5.mouseX, p5.mouseY, bounds)) {
           playPlop();
           selectedForDragging = placed;
@@ -164,7 +190,7 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
   const duplicate = () => {
     if (!selectedElement) {
       for (let placed of placedElements) {
-        const bounds = calculateTextBounds(`${placed.element.emoji} ${placed.element.symbol}`, placed.x, placed.y);
+        const bounds = calculateTextBounds(`${placed.element.symbol}`, placed.x, placed.y);
         if (isInside(p5.mouseX, p5.mouseY, bounds)) {
           const copy = { ...placed.element }; // Assuming shallow copy is sufficient
           const offsetX = 10; // Adjust the offset as needed
@@ -174,7 +200,7 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
             x: placed.x + offsetX,
             y: placed.y + offsetY
           };
-          const bounds = calculateTextBounds(`${copiedElement.element.emoji} ${copiedElement.element.symbol}`, copiedElement.x, copiedElement.y);
+          const bounds = calculateTextBounds(`${copiedElement.element.symbol}`, copiedElement.x, copiedElement.y);
           if (bounds.x + bounds.w <= p5.width - 350) {
             placedElements.push(copiedElement);
           }
@@ -211,24 +237,20 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
 
         placeholders.push(placeholder);
 
-        combineElement(overlappingElement.element.symbol, selectedElement.symbol, (response: Element) => {
+        combineElement(overlappingElement.element.symbol, selectedElement.symbol, (response: Element[]) => {
           const placeholderIndex = placeholders.findIndex(pe => pe.id === placeholder.id);
           if (placeholderIndex !== -1) {
             placeholders.splice(placeholderIndex, 1);
             
-            if (response.symbol != "" && response.emoji != "") {
-
-              placedElements.push({
-                element: { symbol: response.symbol, emoji: response.emoji, discovery: response.discovery },
-                x: placeholder.x,
-                y: placeholder.y
+            if (response.length > 0 && response.every(el => el.symbol !== "")) {
+              response.forEach(el => {
+                placedElements.push({ element: el, x: placeholder.x, y: placeholder.y });
               });
             }
-
           }
         });
       } else {
-        const bounds = calculateTextBounds(`${newPlacedElement.element.emoji} ${newPlacedElement.element.symbol}`, newPlacedElement.x, newPlacedElement.y);
+        const bounds = calculateTextBounds(`${newPlacedElement.element.symbol}`, newPlacedElement.x, newPlacedElement.y);
         if (bounds.x + bounds.w <= p5.width - 350) {
           placedElements.push(newPlacedElement);
         }
@@ -246,7 +268,7 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
     p5.clear();
   
     placedElements.forEach((placed) => {
-      const text = `${placed.element.emoji} ${placed.element.symbol}`;
+      const text = `${placed.element.symbol}`;
       const bounds = calculateTextBounds(text, placed.x, placed.y);
   
       // Compute the symbol combination key with the currently selected element
@@ -289,8 +311,8 @@ const sketch = (p5: P5CanvasInstance<MySketchProps>) => {
     });
   
     if (selectedElement) {
-      const { emoji, symbol } = selectedElement;
-      p5.text(`${emoji} ${symbol}`, p5.mouseX, p5.mouseY);
+      const { symbol } = selectedElement;
+      p5.text(`${symbol}`, p5.mouseX, p5.mouseY);
     }
   };
   
@@ -316,8 +338,6 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
   const [sortCriterion, setSortCriterion] = React.useState<string>('time');
   const [isAscending, setIsAscending] = React.useState<boolean>(true);
   const [pinnedElements, setPinnedElements] = React.useState(new Set());
-  // helper to safely access emoji string within Sidebar
-  const getEmoji = (el: Element) => el.emoji ?? "";
 
   const handleElementPointerDown = (event: React.PointerEvent<HTMLDivElement>, element: Element) => {
     if (event.altKey) {
@@ -340,7 +360,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
   Object.entries(symbolCombos).forEach(([key, value]) => {
     const comboText = key.split('+++').sort().map(symbol => {
       const foundElement = elements.find(element => element.symbol === symbol);
-      return foundElement ? `${foundElement.symbol} (${foundElement.emoji})` : '';
+      return foundElement ? `${foundElement.symbol}` : '';
     }).join(' + ');
     
     if (!directCombosMap[value.symbol]) {
@@ -356,7 +376,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
     value.forEach(el => {
       const fromElement = elements.find(element => element.symbol === key);
       const otherElement = value.find(element => element.symbol !== el.symbol);
-      const comboText = fromElement ? `${fromElement.symbol} (${fromElement.emoji}) = ${el.symbol} (${el.emoji}) + ${otherElement?.symbol} (${otherElement?.emoji})` : '';
+      const comboText = fromElement ? `${fromElement.symbol} = ${el.symbol} + ${otherElement?.symbol}` : '';
 
       if (!inverseCombosMap[el.symbol]) {
         inverseCombosMap[el.symbol] = [comboText];
@@ -409,7 +429,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
         }
     
         // Validate and prepare elements
-        const validElements = elements.filter((el: Element) => el.symbol && el.emoji).map((el: Element) => ({
+        const validElements = elements.filter((el: Element) => el.symbol).map((el: Element) => ({
           ...el,
           discovery: false // Set discovery to false for all elements
         }));
@@ -421,7 +441,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
         // Validate and prepare symbolCombos
         const validSymbolCombos = Object.keys(symbolCombos).reduce((acc: { [key: string]: Element }, key: string) => {
           const el = symbolCombos[key];
-          if (key && el.symbol && el.emoji) {
+          if (key && el.symbol) {
             acc[key] = { ...el, discovery: false }; // Set discovery to false
             return acc;
           } else {
@@ -431,8 +451,8 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
 
         const validInverseSymbolCombos = Object.keys(inverseSymbolCombos).reduce((acc: { [key: string]: Element[] }, key: string) => {
           const elements = inverseSymbolCombos[key];
-          // Check if the key exists, and both elements in the array have valid symbols and emojis
-          if (key && elements.length === 2 && elements.every((el: Element) => el.symbol && el.emoji)) {
+          // Check if the key exists, and both elements in the array have valid symbols
+          if (key && elements.length === 2 && elements.every((el: Element) => el.symbol)) {
             // Here we assume you want to keep the elements as is but ensure discovery is set to false
             // since it's a valid combo being retrieved from storage
             const adjustedElements = elements.map((el: Element) => ({ ...el, discovery: false }));
@@ -446,7 +466,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
         // Merge the input elements and symbolCombos with the current ones
         // Concatenating current elements with new valid elements
         setElements((curr: Element[]) => {
-          const newElements = validElements.filter((newEl: Element) => !curr.some(currEl => currEl.symbol === newEl.symbol && currEl.emoji === newEl.emoji));
+          const newElements = validElements.filter((newEl: Element) => !curr.some(currEl => currEl.symbol === newEl.symbol));
           return [...curr, ...newElements];
         });
         // Merging current symbol combos with new valid symbol combos
@@ -487,8 +507,7 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
   React.useEffect(() => {
     // Filter elements based on search query
     const filteredElements = elements.filter((element) =>
-      element.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      getEmoji(element)?.includes(searchQuery)
+      (element.symbol ? element.symbol.toLowerCase().includes(searchQuery.toLowerCase()) : false)
     );
 
     const pinnedElementsArray = filteredElements.filter(element => pinnedElements.has(element.symbol));
@@ -502,8 +521,8 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
       // Prioritize pinned elements
 
       // If both are pinned or not, sort based on search query and other criteria
-      const queryMatchA = a.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || getEmoji(a).startsWith(searchQuery);
-      const queryMatchB = b.symbol.toLowerCase().startsWith(searchQuery.toLowerCase()) || getEmoji(b).startsWith(searchQuery);
+      const queryMatchA = a.symbol.toLowerCase().startsWith(searchQuery.toLowerCase());
+      const queryMatchB = b.symbol.toLowerCase().startsWith(searchQuery.toLowerCase());
 
       if (queryMatchA && !queryMatchB) return 1;
       if (!queryMatchA && queryMatchB) return -1;
@@ -514,10 +533,6 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
       switch (sortCriterion) {
         case 'discovery':
           return (a.discovery === b.discovery) ? 0 : a.discovery ? -1 : 1;
-        case 'emoji':
-          return getEmoji(a).localeCompare(getEmoji(b));
-        case 'symbol':
-          return a.symbol.localeCompare(b.symbol);
         default:
           return (a.timestamp || 0) - (b.timestamp || 0);
       }
@@ -555,8 +570,6 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
         onChange={(e) => setSortCriterion(e.target.value)}
       >
           <option value="discovery">Sort by discovery</option>
-          <option value="emoji">Sort by emoji</option>
-          <option value="symbol">Sort by symbol</option>
           <option value="time">Sort by time</option>
           </select>
     <button
@@ -599,7 +612,6 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
 
         return (
           <div key={index} title={getHoverText(element.symbol)} className={buttonClass} onPointerDown={(e: React.PointerEvent<HTMLDivElement>) => handleElementPointerDown(e, element)}>
-            <span className={styles.elementEmoji}>{element.emoji}</span>
             <span className={styles.elementText}>{element.symbol}</span>
           </div>
         );
@@ -610,64 +622,11 @@ const Sidebar: React.FC<SidebarProps> = ({ elements, setElements, symbolCombos, 
 };
 
 const starting_elements: Element[] = [
-  { symbol: 'Earth', emoji: '🌍' , discovery: false },
-  { symbol: 'Water', emoji: '💧', discovery: false },
-  { symbol: 'Fire', emoji: '🔥', discovery: false },
-  { symbol: 'Wind', emoji: '🌬️', discovery: false },
+  { symbol: 'Earth', discovery: false },
+  { symbol: 'Water', discovery: false },
+  { symbol: 'Fire', discovery: false },
+  { symbol: 'Wind', discovery: false },
 ];
-
-const HelpOverlay = () => {
-  return (
-    <div className={styles.helpContainer}>
-      <div className={styles.helpButton}>?</div>
-      <div className={styles.helpOverlay}>
-        <ul>
-          <li>🖱️+📄 Drag & drop symbols </li>
-          <li>🫳📄➕📄 Drop on top to combine 🔗 </li>
-          <li>🖱️➡️ Right click to split ✂️ </li>
-          <li>🖱️⬆️ Middle click to duplicate 🔁 </li>
-          <li>⌨️ Type to search 🔍 </li>
-          <li>⎇ (Alt) + 🖱️ click sidebar to pin 📌 </li>
-        </ul>
-      </div>
-    </div>
-  );
-};
-
-var baseUrl = `http://localhost:8000/`;
-
-async function fetchCombinedSymbol(symbol1: string, symbol2: string) {
-  const encodedSymbols = [symbol1, symbol2].map(symbol => encodeURIComponent(symbol));
-
-  const url = baseUrl + `add?symbols=${encodedSymbols.join("&symbols=")}`;
-
-  const response = await fetch(url, {credentials: 'omit'});
-
-  if (!response.ok) {
-    throw new Error('Network response was not ok');
-  }
-
-
-  const json = await response.json();
-  return json;
-}
-
-async function fetchSplitSymbol(symbol: string) {
-  const encoded = encodeURIComponent(symbol)
-
-  const url = baseUrl + `split?symbol=${encoded}`;
-
-  const response = await fetch(url, {credentials: 'omit'});
-
-  if (!response.ok) {
-    throw new Error('Network response was not ok');
-  }
-
-
-  const json = await response.json();
-  return json;
-}
-
 
 const LandingRoute: React.FC = () => {
   const [selectedElement, setSelectedElement] = React.useState<Element | null>(null);
@@ -715,6 +674,144 @@ const LandingRoute: React.FC = () => {
     return setSelectedElement(element)
   }
 
+  const combineElement = async (symbol1: string, symbol2: string, callback: (elements: Element[]) => void) => {
+    const symbols = [symbol1, symbol2]
+    symbols.sort();
+    const symbolKey = symbols.join("+++");
+    const existingElement = symbolCombos[symbolKey];
+    if (existingElement) {
+      if (existingElement.symbol == ""){
+        error_element.play()
+      } else {
+        playPlop()
+      }
+      callback([existingElement]);
+      return;
+    }
+    try {
+      let newElements: Element[];
+      if (useCustomPrompt) {
+        const userContent = addUserPrompt
+          .replace('{{symbol1}}', symbol1)
+          .replace('{{symbol2}}', symbol2);
+        const messages = [
+          { role: "system", content: "You are an API that returns JSON." },
+          { role: "user", content: userContent }
+        ];
+        const response = await fetch(baseUrl + `add_custom`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, symbols: [symbol1, symbol2] }),
+          credentials: 'omit',
+        });
+        if (!response.ok) throw new Error('Network response was not ok');
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          newElements = data.map((obj: any) => ({ symbol: obj.symbol ?? obj.content ?? obj.name ?? (typeof obj === 'string' ? obj : JSON.stringify(obj)), discovery: true }));
+        } else {
+          newElements = [{ symbol: (data.symbol ?? data.content ?? data.name ?? (typeof data === 'string' ? data : JSON.stringify(data))), discovery: true }];
+        }
+      } else {
+        const result = await fetchCombinedSymbol(symbol1, symbol2);
+        newElements = [{ symbol: result, discovery: true }];
+      }
+      setElements(currentElements => {
+        let updated = [...currentElements];
+        newElements.forEach(newElement => {
+          const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
+          if(newElement.discovery && isElementUnique){
+            discovery.play()
+          } else {
+            if (isElementUnique) {
+              new_element.play()
+            } else {
+              playPlop()
+            }
+          }
+          if (isElementUnique) {
+            updated.push(newElement);
+          }
+        });
+        return updated;
+      });
+      // symbolCombosには最初のelementのみ登録
+      setSymbolCombos(currentCombos => ({
+        ...currentCombos,
+        [symbolKey]: newElements[0],
+      }));
+      callback(newElements);
+    } catch (error) {
+      console.error("Error calling on_combine_request:", error);
+      error_element.play()
+      const badElement = {symbol: "", discovery: false}
+      setSymbolCombos(currentCombos => ({
+        ...currentCombos,
+        [symbolKey]: badElement,
+      }));
+      callback([badElement]);
+    }
+  };
+
+  const splitElement = async (symbol: string, callback: (elements: Element[]) => void) => {
+    const existingElements = inverseSymbolCombos[symbol];
+    if (existingElements) {
+      callback(existingElements);
+      return;
+    }
+    try {
+      let newElements: Element[];
+      if (useCustomPrompt) {
+        const userContent = splitUserPrompt.replace('{{symbol}}', symbol);
+        const messages = [
+          { role: "system", content: "You are an API that returns JSON." },
+          { role: "user", content: userContent }
+        ];
+        const response = await fetch(baseUrl + `split_custom`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, symbol }),
+          credentials: 'omit',
+        });
+        if (!response.ok) throw new Error('Network response was not ok');
+        const data = await response.json();
+        newElements = data.result as Element[];
+      } else {
+        newElements = await fetchSplitSymbol(symbol) as Element[];
+      }
+      setElements(currentElements => {
+        const updatedElements = [...currentElements];
+        newElements.forEach(newElement => {
+          const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
+          if (newElement.discovery && isElementUnique) {
+            discovery.play();
+          } else {
+            if (isElementUnique) {
+              new_element.play();
+            } else {
+              playPlop();
+            }
+          }
+          if (isElementUnique) {
+            updatedElements.push(newElement);
+          }
+        });
+        return updatedElements;
+      });
+      setInverseSymbolCombos(currentCombos => ({
+        ...currentCombos,
+        [symbol]: newElements,
+      }));
+      callback(newElements);
+    } catch (error) {
+      console.error("Error calling on_split_request:", error);
+      error_element.play();
+      callback([
+        { symbol: "", discovery: false },
+        { symbol: "", discovery: false }
+      ]);
+    }
+  };
+
   React.useEffect(() => {
     // Function to handle the context menu
     const handleRightClick = (event: MouseEvent) => {
@@ -747,167 +844,6 @@ const LandingRoute: React.FC = () => {
     localStorage.setItem('splitUserPrompt', splitUserPrompt);
     localStorage.setItem('useCustomPrompt', useCustomPrompt.toString());
   }, [addUserPrompt, splitUserPrompt, useCustomPrompt]);
-
-  const combineElement = async (symbol1: string, symbol2: string, callback: (element: Element) => void) => {
-    const symbols = [symbol1, symbol2]
-    symbols.sort();
-    const symbolKey = symbols.join("+++");
-
-    const existingElement = symbolCombos[symbolKey];
-
-    if (existingElement) {
-      if (existingElement.symbol == ""){
-        error_element.play()
-      } else {
-        playPlop()
-      }
-
-      callback(existingElement);
-      return;
-    }
-
-    try {
-      let newElement: Element;
-      
-      if (useCustomPrompt) {
-        // カスタムプロンプトを組み立て
-        const userContent = addUserPrompt
-          .replace('{{symbol1}}', symbol1)
-          .replace('{{symbol2}}', symbol2);
-          
-        const messages = [
-          { role: "system", content: "You are an API that returns JSON." },
-          { role: "user", content: userContent }
-        ];
-        
-        const response = await fetch(baseUrl + `add_custom`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, symbols: [symbol1, symbol2] }),
-          credentials: 'omit',
-        });
-        
-        if (!response.ok) throw new Error('Network response was not ok');
-        newElement = await response.json();
-      } else {
-        // デフォルトのエンドポイント
-        newElement = await fetchCombinedSymbol(symbol1, symbol2);
-      }
-      
-      setElements(currentElements => {
-        const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
-
-        if(newElement.discovery && isElementUnique){
-          discovery.play()
-        } else {
-          if (isElementUnique) {
-            new_element.play()
-          } else {
-            playPlop()
-          }
-        }
-
-        if (isElementUnique) {
-          return [...currentElements, newElement];
-        } else {
-          return currentElements;
-        }
-      });
-
-      setSymbolCombos(currentCombos => ({
-        ...currentCombos,
-        [symbolKey]: newElement,
-      }));
-
-      callback(newElement);
-    } catch (error) {
-      console.error("Error calling on_combine_request:", error);
-      error_element.play()
-
-      const badElement = {symbol: "", emoji: "", discovery: false}
-
-      setSymbolCombos(currentCombos => ({
-        ...currentCombos,
-        [symbolKey]: badElement,
-      }));
-
-      callback(badElement);
-    }
-  };
-
-  const splitElement = async (symbol: string, callback: (elements: Element[]) => void) => {
-    const existingElements = inverseSymbolCombos[symbol];
-    
-    if (existingElements) {
-      callback(existingElements);
-      return;
-    }
-
-    try {
-      let newElements: Element[];
-      
-      if (useCustomPrompt) {
-        // カスタムプロンプトを組み立て
-        const userContent = splitUserPrompt.replace('{{symbol}}', symbol);
-        
-        const messages = [
-          { role: "system", content: "You are an API that returns JSON." },
-          { role: "user", content: userContent }
-        ];
-        
-        const response = await fetch(baseUrl + `split_custom`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, symbol }),
-          credentials: 'omit',
-        });
-        
-        if (!response.ok) throw new Error('Network response was not ok');
-        newElements = await response.json();
-      } else {
-        // デフォルトのエンドポイント
-        newElements = await fetchSplitSymbol(symbol) as Element[];
-      }
-      
-      setElements(currentElements => {
-        const updatedElements = [...currentElements];
-        
-        newElements.forEach(newElement => {
-          const isElementUnique = !currentElements.some(element => element.symbol === newElement.symbol);
-          
-          if (newElement.discovery && isElementUnique) {
-            discovery.play();
-          } else {
-            if (isElementUnique) {
-              new_element.play();
-            } else {
-              playPlop();
-            }
-          }
-          
-          if (isElementUnique) {
-            updatedElements.push(newElement);
-          }
-        });
-        
-        return updatedElements;
-      });
-      
-      setInverseSymbolCombos(currentCombos => ({
-        ...currentCombos,
-        [symbol]: newElements,
-      }));
-      
-      callback(newElements);
-    } catch (error) {
-      console.error("Error calling on_split_request:", error);
-      error_element.play();
-      callback([
-        { symbol: "", emoji: "", discovery: false },
-        { symbol: "", emoji: "", discovery: false }
-      ]);
-    }
-  };
 
   React.useEffect(() => {
     if (selectedElement !== null){

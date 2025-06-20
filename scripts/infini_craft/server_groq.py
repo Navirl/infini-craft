@@ -146,18 +146,77 @@ Example for "Steam":
 
 
 def parse_add_response(text: str):
-    """Parse JSON response for add. Fallback to legacy space-separated format."""
+    """Parse JSON response for add. Extract only the 'appearance' field."""
+    # Extract JSON from markdown response
+    import re
+    json_match = re.search(r'\[.*\{.*\}.*\]', text, re.DOTALL)
+    if json_match:
+        text = json_match.group(0)
+    
+    print(f"Extracted JSON: {text}")
+    print(f"Raw response text: {text}")  # Add debug logging
+    # Try parsing as a single JSON array
     try:
         data = json.loads(text)
-        if isinstance(data, dict) and "symbol" in data:
-            return {"symbol": data.get("symbol", "").strip(), "emoji": data.get("emoji", "").strip()}
-    except Exception:
-        pass  # fall back to legacy parsing
+        print(f"Parsed JSON data: {data}")  # Add debug logging
+        if isinstance(data, list):
+            # Extract the first appearance string from each character object
+            appearances = []
+            for char in data:
+                if isinstance(char, dict) and 'appearance' in char and isinstance(char['appearance'], list) and len(char['appearance']) > 0:
+                    appearances.append(char['appearance'][0])
+                else:
+                    appearances.append('')
+            return appearances
+    except json.JSONDecodeError:
+        pass
+    
+    # Try parsing as a single JSON object and wrap it in a list
     try:
-        word, emoji = text.strip().rsplit(" ", 1)
-    except ValueError:
-        word, emoji = text.strip(), ""
-    return {"symbol": word.strip(), "emoji": emoji.strip()}
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return parse_add_response(json.dumps([data]))
+    except json.JSONDecodeError:
+        pass
+    
+    # Try parsing as multiple JSON objects separated by newlines
+    try:
+        objects = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                objects.append(obj)
+            except json.JSONDecodeError:
+                pass
+        if objects:
+            return parse_add_response(json.dumps(objects))
+    except Exception:
+        pass
+    
+    # Fallback: try legacy parsing
+    try:
+        return parse_legacy_response(text)
+    except Exception:
+        return []
+
+
+def parse_legacy_response(text: str):
+    """Parse legacy '+' format and return array of symbols (appearances)."""
+    parts = text.split("+")
+    result = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            word, emoji = part.rsplit(" ", 1)
+        except ValueError:
+            word, emoji = part, ""
+        result.append(word.strip())
+    return result
 
 
 def parse_split_response(text: str):
@@ -180,20 +239,7 @@ def parse_split_response(text: str):
         pass  # fallback
 
     # Legacy '+' parsing
-    parts = text.split("+")
-    result = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            word, emoji = part.rsplit(" ", 1)
-        except ValueError:
-            word, emoji = part, ""
-        result.append({"symbol": word.strip(), "emoji": emoji.strip()})
-    while len(result) < 2:
-        result.append({"symbol": "", "emoji": ""})
-    return result[:2]
+    return parse_legacy_response(text)
 
 # -----------------------------------------------------------------------------
 # Caching wrappers
